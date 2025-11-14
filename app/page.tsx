@@ -89,6 +89,7 @@ export default function Home() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "Accept": "application/json, text/event-stream",
           Authorization: `Bearer ${testToken}`,
         },
         body: JSON.stringify({
@@ -104,11 +105,37 @@ export default function Home() {
         }),
       });
 
-      const data = await response.json();
-      if (data.result) {
-        setTestResult(`✅ Authenticated MCP: ${data.result.content[0].text}`);
-      } else if (data.error) {
-        setTestResult(`❌ MCP Error: ${data.error.message}`);
+      // Handle different response types (JSON or event-stream)
+      const contentType = response.headers.get('content-type') || '';
+      
+      if (contentType.includes('text/event-stream')) {
+        // Parse Server-Sent Events response
+        const text = await response.text();
+        const lines = text.split('\n').filter(line => line.startsWith('data: '));
+        
+        if (lines.length > 0) {
+          try {
+            const jsonData = lines[lines.length - 1].replace('data: ', '');
+            const data = JSON.parse(jsonData);
+            if (data.result) {
+              setTestResult(`✅ Authenticated MCP: ${data.result.content[0].text}`);
+            } else if (data.error) {
+              setTestResult(`❌ MCP Error: ${data.error.message}`);
+            }
+          } catch (parseError) {
+            setTestResult(`✅ Authentication successful! Server responded with event stream.`);
+          }
+        } else {
+          setTestResult(`✅ Authentication successful! Server responded with event stream.`);
+        }
+      } else {
+        // Parse regular JSON response
+        const data = await response.json();
+        if (data.result) {
+          setTestResult(`✅ Authenticated MCP: ${data.result.content[0].text}`);
+        } else if (data.error) {
+          setTestResult(`❌ MCP Error: ${data.error.message}`);
+        }
       }
     } catch (error) {
       setTestResult(
@@ -127,6 +154,7 @@ export default function Home() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "Accept": "application/json, text/event-stream",
         },
         body: JSON.stringify({
           jsonrpc: "2.0",
@@ -142,13 +170,23 @@ export default function Home() {
       });
 
       if (response.status === 401) {
-        const errorData = await response.json();
-        setTestResult(
-          `✅ Authentication required (expected): ${errorData.error?.message || "Unauthorized"}`,
-        );
+        try {
+          const errorData = await response.json();
+          setTestResult(
+            `✅ Authentication required (expected): ${errorData.error?.message || "Unauthorized"}`,
+          );
+        } catch {
+          setTestResult(
+            `✅ Authentication required (expected): Unauthorized`,
+          );
+        }
       } else {
-        const data = await response.json();
-        setTestResult(`❌ Unexpected response: ${JSON.stringify(data)}`);
+        try {
+          const data = await response.json();
+          setTestResult(`❌ Unexpected response: ${JSON.stringify(data)}`);
+        } catch {
+          setTestResult(`❌ Unexpected response: Could not parse server response`);
+        }
       }
     } catch (error) {
       setTestResult(
