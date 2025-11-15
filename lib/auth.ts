@@ -173,42 +173,110 @@ export async function verifyGoogleToken(
     if (tokenSegments.length === 3) {
       // This is a JWT ID token - use the existing verification method
       console.log("Token appears to be a JWT ID token");
-
-      const ticket = await googleClient.verifyIdToken({
-        idToken: bearerToken,
-        audience: process.env.GOOGLE_CLIENT_ID,
-      });
-
-      const payload = ticket.getPayload();
-      if (!payload) {
-        console.log("Token payload is empty");
-        return undefined;
+      console.log("Token preview:", `${bearerToken.substring(0, 50)}...`);
+      
+      // Debug: Let's check the token parts
+      try {
+        console.log("Decoding JWT header...");
+        const header = JSON.parse(atob(tokenSegments[0]));
+        console.log("JWT Header:", header);
+        
+        console.log("Decoding JWT payload...");
+        const payload = JSON.parse(atob(tokenSegments[1]));
+        console.log("JWT Payload (audience):", payload.aud);
+        console.log("JWT Payload (issuer):", payload.iss);
+        console.log("JWT Payload (expiry):", new Date(payload.exp * 1000).toISOString());
+      } catch (decodeError) {
+        console.log("❌ Error decoding JWT manually:", decodeError);
       }
 
-      console.log(
-        "✅ Google ID token verified successfully for user:",
-        payload.email,
-      );
+      try {
+        const ticket = await googleClient.verifyIdToken({
+          idToken: bearerToken,
+          audience: process.env.GOOGLE_CLIENT_ID,
+        });
 
-      authInfo = {
-        token: bearerToken,
-        scopes: ["read:mcp", "write:mcp", "mcp:read", "mcp:write", "mcp:tools"], // MCP 2025-06-18 scopes
-        clientId: payload.sub, // Google user ID (unique identifier)
-        expiresAt: payload.exp, // Token expiration timestamp
-        extra: {
-          // Additional user information from Google
-          email: payload.email,
-          name: payload.name,
-          picture: payload.picture,
-          verified: payload.email_verified,
-          domain: payload.hd, // G Suite domain (if applicable)
-          locale: payload.locale,
-          provider: "google",
-          tokenType: "id_token",
-          mcpCompliant: "2025-06-18",
-          audience: baseUrl,
-        },
-      };
+        const payload = ticket.getPayload();
+        if (!payload) {
+          console.log("Token payload is empty");
+          return undefined;
+        }
+
+        console.log(
+          "✅ Google ID token verified successfully for user:",
+          payload.email,
+        );
+
+        authInfo = {
+          token: bearerToken,
+          scopes: ["read:mcp", "write:mcp", "mcp:read", "mcp:write", "mcp:tools"], // MCP 2025-06-18 scopes
+          clientId: payload.sub, // Google user ID (unique identifier)
+          expiresAt: payload.exp, // Token expiration timestamp
+          extra: {
+            // Additional user information from Google
+            email: payload.email,
+            name: payload.name,
+            picture: payload.picture,
+            verified: payload.email_verified,
+            domain: payload.hd, // G Suite domain (if applicable)
+            locale: payload.locale,
+            provider: "google",
+            tokenType: "id_token",
+            mcpCompliant: "2025-06-18",
+            audience: baseUrl,
+          },
+        };
+      } catch (jwtError) {
+        // If ID token verification fails, try treating it as an access token
+        console.log("❌ ID token verification failed, trying as access token:", jwtError.message);
+        
+        console.log(
+          "Fallback: treating JWT as access token, using UserInfo API",
+        );
+
+        const userInfoResponse = await fetch(
+          "https://www.googleapis.com/oauth2/v2/userinfo",
+          {
+            headers: {
+              Authorization: `Bearer ${bearerToken}`,
+            },
+          },
+        );
+
+        if (!userInfoResponse.ok) {
+          console.log(
+            "UserInfo API call failed:",
+            userInfoResponse.status,
+            userInfoResponse.statusText,
+          );
+          throw new Error(`UserInfo API failed: ${userInfoResponse.status} ${userInfoResponse.statusText}`);
+        }
+
+        const userInfo = await userInfoResponse.json();
+        console.log(
+          "✅ Google access token verified successfully for user:",
+          userInfo.email,
+        );
+
+        authInfo = {
+          token: bearerToken,
+          scopes: ["read:mcp", "write:mcp", "mcp:read", "mcp:write", "mcp:tools"], // MCP 2025-06-18 scopes
+          clientId: userInfo.id, // Google user ID
+          expiresAt: undefined, // Access tokens don't have expiration in the token itself
+          extra: {
+            // Additional user information from Google UserInfo API
+            email: userInfo.email,
+            name: userInfo.name,
+            picture: userInfo.picture,
+            verified: userInfo.verified_email,
+            locale: userInfo.locale,
+            provider: "google",
+            tokenType: "access_token_fallback",
+            mcpCompliant: "2025-06-18",
+            audience: baseUrl,
+          },
+        };
+      }
     } else if (bearerToken.startsWith("ya29.")) {
       // This appears to be an access token - use Google's UserInfo API
       console.log(
